@@ -46,7 +46,7 @@ function renderState(s) {
   $('cFlagged').textContent = c.flagged || 0;
 
   if (s.settings) fillSettings(s.settings);
-  if (Array.isArray(s.log)) { $('log').innerHTML = ''; s.log.forEach(appendLog); }
+  if (Array.isArray(s.log)) { $('log').innerHTML = ''; s.log.forEach(appendLog); renderLiveInitial(s.log); }
 }
 
 function fillSettings(st) {
@@ -86,6 +86,38 @@ function appendLog(line) {
   // keep last ~500 nodes
   while (log.childNodes.length > 500) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
+}
+
+// ---- Live log (Run tab) with a typewriter animation on the newest line ----
+let typeTimer = null, typeEl = null;
+function finishTyping() {
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+  if (typeEl) { const t = typeEl.querySelector('.txt'); if (t) t.textContent = typeEl._full; typeEl.querySelector('.cursor')?.remove(); typeEl = null; }
+}
+function liveAppend(line, animate = true) {
+  const box = $('liveLog'); if (!box) return;
+  finishTyping();                                   // complete any in-progress line instantly
+  [...box.children].forEach(c => c.classList.remove('new'));
+  const div = document.createElement('div');
+  div.className = 'll new';
+  div._full = String(line.text || '');
+  div.innerHTML = `<span class="tt">${fmtTime(line.ts)}</span><span class="txt ${esc(line.kind || '')}"></span>`;
+  box.appendChild(div);
+  while (box.childNodes.length > 40) box.removeChild(box.firstChild);
+  const txt = div.querySelector('.txt');
+  if (!animate) { txt.textContent = div._full; box.scrollTop = box.scrollHeight; return; }
+  const cur = document.createElement('span'); cur.className = 'cursor'; div.appendChild(cur);
+  const full = div._full; const step = Math.max(1, Math.ceil(full.length / 40)); let i = 0;
+  typeEl = div;
+  typeTimer = setInterval(() => {
+    i += step; txt.textContent = full.slice(0, i); box.scrollTop = box.scrollHeight;
+    if (i >= full.length) finishTyping();
+  }, 18);
+}
+function renderLiveInitial(lines) {
+  const box = $('liveLog'); if (!box) return;
+  finishTyping(); box.innerHTML = '';
+  (lines || []).slice(-14).forEach(l => liveAppend(l, false));   // no animation on bulk load
 }
 
 // ---------------- scan render ----------------
@@ -228,7 +260,7 @@ $('dryRun').addEventListener('change', () => {
   send({ action: 'saveSettings', patch: { dryRun: $('dryRun').checked } });
 });
 
-$('btnClearLog').addEventListener('click', () => { send({ action: 'clearLog' }); $('log').innerHTML = ''; });
+$('btnClearLog').addEventListener('click', () => { send({ action: 'clearLog' }); $('log').innerHTML = ''; const lv = $('liveLog'); if (lv) lv.innerHTML = ''; });
 
 // Engine controls.
 let uiState = { running: false, paused: false, pausedByCaptcha: false };
@@ -287,8 +319,8 @@ $('btnReset').addEventListener('click', async () => {
 
 // ---------------- live updates ----------------
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.action === 'log' && msg.line) appendLog(msg.line);
-  if (msg?.action === 'logCleared') $('log').innerHTML = '';
+  if (msg?.action === 'log' && msg.line) { appendLog(msg.line); liveAppend(msg.line); }
+  if (msg?.action === 'logCleared') { $('log').innerHTML = ''; const lv = $('liveLog'); if (lv) lv.innerHTML = ''; }
   if (msg?.action === 'progress' && msg.payload) renderState({ ok: true, ...msg.payload });
 });
 

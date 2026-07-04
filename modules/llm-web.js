@@ -13,6 +13,9 @@ const SITES = {
 };
 
 let tabId = null;
+let preferredWindowId = null;
+// Create the LLM tab in the dashboard's window too (see amazon-tab.setWindow).
+export function setWindow(id) { preferredWindowId = (typeof id === 'number') ? id : null; }
 
 export function isWebMode(mode) { return mode === 'gemini-web' || mode === 'chatgpt-web'; }
 
@@ -46,8 +49,14 @@ async function ensure(url, timeoutMs, bringToFrontOnLogin) {
     } catch { tabId = null; }
   }
 
-  if (tabId == null) { const t = await chrome.tabs.create({ url, active: false }); tabId = t.id; }
-  else { await chrome.tabs.update(tabId, { url }); }
+  if (tabId == null) {
+    const opts = { url, active: false };
+    if (preferredWindowId != null) opts.windowId = preferredWindowId;
+    let t;
+    try { t = await chrome.tabs.create(opts); }
+    catch { t = await chrome.tabs.create({ url, active: false }); }   // window gone → default
+    tabId = t.id;
+  } else { await chrome.tabs.update(tabId, { url }); }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

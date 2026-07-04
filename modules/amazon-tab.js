@@ -8,13 +8,22 @@
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let tabId = null;
+let preferredWindowId = null;
+// Create the managed tab in a SPECIFIC window (the dashboard's) so the run's
+// tabs live alongside the dashboard — then "show working tab" is a smooth
+// in-window tab switch instead of the OS jumping between separate windows.
+export function setWindow(id) { preferredWindowId = (typeof id === 'number') ? id : null; }
 
 export async function ensureTab() {
   if (tabId != null) {
     try { await chrome.tabs.get(tabId); return tabId; }
     catch { tabId = null; }
   }
-  const t = await chrome.tabs.create({ url: 'about:blank', active: false });
+  const opts = { url: 'about:blank', active: false };
+  if (preferredWindowId != null) opts.windowId = preferredWindowId;
+  let t;
+  try { t = await chrome.tabs.create(opts); }
+  catch { t = await chrome.tabs.create({ url: 'about:blank', active: false }); }  // window gone → default
   tabId = t.id;
   return tabId;
 }

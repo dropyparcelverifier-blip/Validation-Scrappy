@@ -120,6 +120,19 @@
   .logline .t { color: var(--faint); margin-right: 7px; }
   .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); } .info { color: var(--info); }
 
+  /* Live log in the Run tab — fills the blank space, with a typewriter cursor */
+  .card.live { display: flex; flex-direction: column; }
+  .livelog { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.65;
+    background: #07090e; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 8px 9px; min-height: 150px; max-height: 300px; overflow-y: auto; }
+  .livelog:empty::before { content: "Waiting for a run…"; color: var(--faint); }
+  .ll { white-space: pre-wrap; word-break: break-word; opacity: .58; transition: opacity .2s; padding: 1px 0; }
+  .ll.new { opacity: 1; }
+  .ll .tt { color: var(--faint); margin-right: 6px; }
+  .ll .cursor { display: inline-block; width: 6px; height: 1em; vertical-align: -2px;
+    background: var(--accent); margin-left: 1px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
   .banner { border: 1px solid rgba(251,191,36,.4); background: rgba(251,191,36,.08); }
 </style>
 </head>
@@ -185,6 +198,11 @@
 
       <p class="hint">Open the Validation dashboard tab, leave <b>Dry-run ON</b>, then Start. It fills every
         field; turn dry-run off to go live (clicks Pass / Link NF / USA Link NF).</p>
+
+      <div class="card live">
+        <h3>Live</h3>
+        <div id="liveLog" class="livelog"></div>
+      </div>
     </section>
 
     <!-- SCAN -->

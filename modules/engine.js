@@ -13,7 +13,7 @@
 import { K, getSettings, PAGE } from '../config.js';
 import * as tab from './amazon-tab.js';
 import { analyzePrompt, parseAnalyze, analyzeApi } from './llm.js';
-import { askWeb, isWebMode, closeTab as closeLlmTab } from './llm-web.js';
+import { askWeb, isWebMode, closeTab as closeLlmTab, setWindow as setLlmWindow } from './llm-web.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rand = (a, b) => Math.round(a + Math.random() * (b - a));
@@ -83,10 +83,20 @@ export function createEngine(ctx) {
     if (s.pauseRequested) { s.paused = true; s.status = 'Paused'; persist(); throw new Stopped(); } // pause exits the loop; resume re-enters
   }
 
+  // Keep the run's Amazon + LLM tabs in the dashboard's CURRENT window (it may be
+  // closed/reopened → new windowId). Always sync (pass null to clear a stale id).
+  async function syncWorkingWindow() {
+    try { const w = await ctx.getWorkingWindowId?.(); tab.setWindow(w == null ? null : w); setLlmWindow(w == null ? null : w); } catch {}
+  }
+
   // ---- throttled, retrying Amazon navigation --------------------------------
   async function loadAmazon(url, settings) {
     await sleep(rand(settings.throttleMinMs, settings.throttleMaxMs));
     checkControl();
+    // Bring the Amazon tab forward BEFORE the load so the user watches it open
+    // (India/USA), then again after so it wins over anything that stole focus.
+    const show = settings.showWorkingTab !== false;
+    if (show) { try { await tab.ensureTab(); await tab.bringToFront(); } catch {} }
     let r;
     try {
       r = await tab.navigate(url, settings.pageTimeoutMs);
@@ -96,8 +106,7 @@ export function createEngine(ctx) {
       checkControl();
       r = await tab.navigate(url, settings.pageTimeoutMs); // throws on 2nd failure -> row flagged by caller
     }
-    // Show the working tab so the user can watch the current product.
-    if (settings.showWorkingTab !== false) { try { await tab.bringToFront(); } catch {} }
+    if (show) { try { await tab.bringToFront(); } catch {} }
     return r;
   }
 
@@ -152,6 +161,7 @@ export function createEngine(ctx) {
     // Bring the DASHBOARD tab forward for dashboard phases (Amazon scraping
     // brings the Amazon tab forward via loadAmazon; the LLM call brings its tab).
     const showDash = async () => { if (settings.showWorkingTab !== false) await ctx.focusDashboard?.(); };
+    await syncWorkingWindow();   // re-anchor tabs to the dashboard window each product
     await showDash();
     highlight(asin);  // mark the row on the dashboard
 
@@ -247,15 +257,16 @@ export function createEngine(ctx) {
       rec._catOverride = mainTagCategory(rec.amazonCategoryPath, rec.amazonCategory, catOptions);
     }
     if (rec._catOverride) log(`${asin}: category override → "${rec._catOverride}" (curated rule) — skipping LLM`, 'info', asin);
-    // BREADCRUMB PREFERRED (user rule 2026-06-11): whenever the Amazon breadcrumb
-    // CONFIDENTLY maps to a dropdown option (≥2 breadcrumb words, full option
-    // coverage, OR a strong leaf/product-type match), use it DIRECTLY and skip the
-    // LLM — Amazon's own categorization is authoritative and the LLM only adds
-    // latency + error. The LLM runs only for WEAK/ambiguous breadcrumbs.
+    // AMAZON TREE PREFERRED, NO LLM unless needed (user rule 2026-06-11): the
+    // breadcrumb is authoritative. If it matches ANY dropdown option word at all
+    // (viaAmazon) we use the breadcrumb and DON'T call the category LLM — the
+    // dept-guard / breadcrumb-support / main-tag catch-all clean up weak/wrong
+    // picks. The LLM runs for category ONLY when the breadcrumb yields NOTHING
+    // (no option word matched) — i.e. the category is "almost not given".
     const hCat = catOptions.length ? categorize(rec.title, rec.brand, catOptions, rec.amazonCategory, rec.amazonCategoryPath) : null;
-    const strongHeuristic = !!(hCat && hCat.confident);
-    if (strongHeuristic) log(`${asin}: category from Amazon breadcrumb (confident) — skipping LLM`, 'info', asin);
-    const needCategory = settings.useLlmCategory && catOptions.length > 0 && !strongHeuristic && !rec._catOverride;
+    const breadcrumbHasMatch = !!(hCat && hCat.viaAmazon);
+    if (breadcrumbHasMatch) log(`${asin}: category from Amazon breadcrumb — skipping LLM`, 'info', asin);
+    const needCategory = settings.useLlmCategory && catOptions.length > 0 && !rec._catOverride && !breadcrumbHasMatch;
     // Weight needs the LLM only when Amazon's value is MISSING or IMPOSSIBLE
     // (below its liquid-volume floor) — OR when the LLM is already being called
     // for the category (weight rides along free, giving a cross-verify at no
@@ -326,6 +337,7 @@ export function createEngine(ctx) {
     // Amazon.in files without an Item Weight). Prevents a bogus/blank 0 in the cell.
     if (rec.weightGrams == null && rec.usaWeightGrams > 0) {
       rec.weightGrams = rec.usaWeightGrams; rec.weightSource = 'amazon-usa'; rec.weightConfidence = null;
+      rec.flags = rec.flags.filter(f => !/WEIGHT MISSING/.test(f));   // it's resolved now — drop the stale flag
       rec.flags.push(`weight from amazon.com (.in had none): ${rec.usaWeightGrams}g (verify)`);
       log(`${asin}: weight from amazon.com = ${rec.usaWeightGrams}g (.in had none)`, 'ok', asin);
       await writeField(asin, 'weight', rec.weightGrams, rec);
@@ -643,7 +655,11 @@ export function createEngine(ctx) {
     // keeps a genuinely supported pick (its words ARE in the breadcrumb).
     if (chosen && !/\bother\b/i.test(chosen)) {
       const bc = breadcrumbWeights(rec.amazonCategoryPath, amazonCat);          // stemmed token→weight
-      const supported = tokens(chosen).map(stemTok).some(t => bc.has(t) && !DEPT_CANON[t]);
+      // Support = a NON-department breadcrumb word matches. Exclude only true dept
+      // NAMES (DEPT_CANON[t]===t, e.g. "beauty"/"health"); keep specific leaf words
+      // that are also dept SYNONYMS ("haircare"→beauty, "bedding"→home) as support
+      // — else "Beauty - Haircare Bath Shower" would look unsupported for a shampoo.
+      const supported = tokens(chosen).map(stemTok).some(t => bc.has(t) && DEPT_CANON[t] !== t);
       if (!supported) {
         const alt = mainTagCategory(rec.amazonCategoryPath, amazonCat, options);
         if (alt && norm(alt) !== norm(chosen)) {
@@ -951,6 +967,7 @@ export function createEngine(ctx) {
     s.loopActive = true;
     const myReset = s.resetSeq;
     const settings = await getSettings();
+    await syncWorkingWindow();   // put run tabs in the dashboard's window (re-checked per row too)
     try {
       while (!s.stopRequested && !s.pauseRequested && !s.pausedByCaptcha) {
         const rows = await readPage();
@@ -1151,6 +1168,15 @@ function stemTok(w) {
   if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') && !w.endsWith('us') && !w.endsWith('is')) return w.slice(0, -1);
   return w;
 }
+// Concatenate ADJACENT tokens so a SMASHED dropdown word matches a SPACED
+// breadcrumb (the Amazon tree): "Hair Care" → also "haircare" (matches the
+// "Beauty - Haircare Bath Shower" option), "Body Wash" → "bodywash", "Bed Sheet"
+// → "bedsheet". The concat need not be a real word — only consistent both sides.
+function withBigrams(toks) {
+  const out = toks.slice();
+  for (let i = 0; i + 1 < toks.length; i++) out.push(toks[i] + toks[i + 1]);
+  return out;
+}
 // "Closest" match between the dashboard options and the product. The Amazon
 // breadcrumb (amazonCategory) is the strongest signal (weight 5); title/brand
 // are weak (weight 1) so an incidental word like "baby" in a novel title can't
@@ -1173,7 +1199,7 @@ const CATEGORY_OVERRIDES = [
   // SPEC word (volt/SLA/AGM/AH/lithium/rechargeable…) so "battery charger/case"
   // and incidental "battery" mentions don't match. User (2026-06-11): batteries
   // → the Automotive CATCH-ALL "Automotive - Other Products" (not the batteries bucket).
-  { re: /(?=.*\bbatter(?:y|ies)\b)(?=.*\b(?:volt|sla|agm|lead[\s-]?acid|lithium|li-?ion|ni-?mh|rechargeable|\d+\s*v\b|\d+\s*ah\b|\d+\s*mah\b)\b)/i, target: ['automotive', 'other'] },
+  { re: /(?=.*\bbatter(?:y|ies)\b)(?=.*\b(?:volt|sla|agm|lead[\s-]?acid|lithium|li-?ion|ni-?mh|\d+\s*v\b|\d+\s*ah\b|\d+\s*mah\b)\b)(?!.*\b(?:charger|chargers|case|cases|holder|tester|organizer|cable|cables|terminal|clip|clips|box|monitor|powered|operated|fans?|toothbrush|shaver|trimmer|lamp|lights?|torch|flashlight|toys?|speaker|radio|clock|watch|drill|mower|pump|heater)\b)/i, target: ['automotive', 'other'] },
   // Microscopes (scientific instruments) — the breadcrumb "Binoculars/Telescopes/
   // Optics > Microscopes" otherwise scatters them to USB Flash Drives / Projectors
   // / blank. → the scientific bucket (user 2026-06-11).
@@ -1186,7 +1212,7 @@ const CATEGORY_OVERRIDES = [
 // so a HOME cleaning cloth → Home-Other but a CAR one → Automotive-Other. Cleaning
 // CONSUMABLES only (cloth/wipe/mop/duster/sponge) — NOT appliances (vacuums) nor a
 // "microfiber HAIR towel" (which stays Beauty).
-const FORCE_DEPT_CATCHALL_RE = /\b(?:microfiber|cleaning|kitchen|dish|scrub)\s+(?:cloth|cloths|wipe|wipes|rag|rags|sponge|sponges|pad|pads)\b|\bcleaning\s+(?:cloth|wipe|rag)\b|\b(?:mop|mops|squeegee|squeegees|duster|dusters|scrubber|scrubbers)\b/i;
+const FORCE_DEPT_CATCHALL_RE = /\b(?:microfiber|cleaning|kitchen|dish|scrub)\s+(?:cloth|cloths|wipe|wipes|rag|rags|sponge|sponges)\b|\bcleaning\s+(?:cloth|wipe|rag)\b|\b(?:mop|mops|squeegee|squeegees|duster|dusters|scrubber|scrubbers)\b/i;
 function categoryOverride(title, amazonCategory, options) {
   const hay = `${title || ''} ${amazonCategory || ''}`;
   for (const o of CATEGORY_OVERRIDES) {
@@ -1207,31 +1233,51 @@ function categoryOverride(title, amazonCategory, options) {
 // product must never be "Automotive …").
 const DEPT_CANON = {
   beauty: 'beauty', baby: 'baby', automotive: 'automotive', car: 'automotive', vehicle: 'automotive',
-  health: 'health', household: 'health', personal: '', pet: 'pet', grocery: 'grocery', gourmet: 'grocery',
+  health: 'health', healthcare: 'health', household: 'health', medical: 'health', personal: '',
+  pet: 'pet', grocery: 'grocery', gourmet: 'grocery',
   home: 'home', kitchen: 'home', furniture: 'home', electronics: 'electronics', electronic: 'electronics',
-  computer: 'electronics', computers: 'electronics', toys: 'toys', toy: 'toys', games: 'toys', sports: 'sports', sport: 'sports',
+  computer: 'electronics', computers: 'electronics', toys: 'toys', toy: 'toys', sports: 'sports', sport: 'sports',
   outdoors: 'sports', office: 'office', garden: 'garden', patio: 'garden', tools: 'tools',
   industrial: 'business', business: 'business', scientific: 'business', clothing: 'apparel',
   apparel: 'apparel', shoes: 'apparel', fashion: 'apparel', luggage: 'luggage', jewelry: 'jewelry',
-  books: 'books', book: 'books', music: 'music', musical: 'music',
+  books: 'books', music: 'music', musical: 'music',
   // Camera is an Amazon sub-department of Electronics — keep them the SAME family
   // so "Camera Accessories"/"Camera Lenses" aren't dropped under an Electronics
   // breadcrumb (and vice-versa).
   camera: 'electronics', camcorder: 'electronics', photo: 'electronics',
+  // Synonyms / smashed forms so EVERY department matches across Amazon-root vs
+  // dashboard-prefix spelling (bigrams like "haircare"/"homecare" resolve too).
+  cosmetics: 'beauty', cosmetic: 'beauty', makeup: 'beauty', skincare: 'beauty', haircare: 'beauty',
+  fragrance: 'beauty', grooming: 'beauty',
+  motorbike: 'automotive', motorcycle: 'automotive',
+  footwear: 'apparel', clothes: 'apparel', garment: 'apparel', jewellery: 'jewelry',
+  // NB: only "mobiles" (the Amazon dept), NOT "mobile" — "Mobile Home" must stay home.
+  mobiles: 'electronics', computing: 'electronics',
+  homecare: 'home', kitchenware: 'home', cookware: 'home', furnishing: 'home', furnishings: 'home',
+  decor: 'home', bedding: 'home', appliance: 'home', appliances: 'home',
+  beverage: 'grocery', beverages: 'grocery', snacks: 'grocery', pantry: 'grocery',
+  pets: 'pet', petcare: 'pet', stationery: 'office',
+  commercial: 'business', laboratory: 'business',
+  // NB: dropped "hardware"→tools (Networking/Computer Hardware are electronics) and
+  // "instruments"→music (Surgical/Lab Instruments); "musical" already covers music.
 };
 // Drop anything after "excl"/"excluding"/"except" — those words name what the
 // category EXCLUDES (e.g. "Electronic Devices excl TV Camera"), so they must NOT
 // count toward the department ("Camera" there is excluded, not the department).
-function deptText(text) { return String(text || '').replace(/\bexcl\w*[\s\S]*$|\bexcept\b[\s\S]*$/i, ''); }
+function deptText(text) { return String(text || '').replace(/\b(?:excl\.?|excluding|excludes?|except)\b[\s\S]*$/i, ''); }
+// withBigrams so a SMASHED dashboard/Amazon dept word matches a SPACED one for
+// EVERY department: "Health Care"→"healthcare", "Home Care"→"homecare", "Hair
+// Care"→"haircare", "Make Up"→"makeup". Single tokens are checked first (so the
+// primary/root dept wins), then the concatenations.
 function detectDept(text) {
-  for (const w of tokens(deptText(text))) { if (Object.prototype.hasOwnProperty.call(DEPT_CANON, w) && DEPT_CANON[w]) return DEPT_CANON[w]; }
+  for (const w of withBigrams(tokens(deptText(text)))) { if (Object.prototype.hasOwnProperty.call(DEPT_CANON, w) && DEPT_CANON[w]) return DEPT_CANON[w]; }
   return '';
 }
 // ALL canonical departments named in a label (e.g. "Apparel - Baby" → {apparel,
 // baby}). Used by the dept-guard so a cross-listed option isn't wrongly dropped.
 function allDepts(text) {
   const out = new Set();
-  for (const w of tokens(deptText(text))) { const c = DEPT_CANON[w]; if (c) out.add(c); }
+  for (const w of withBigrams(tokens(deptText(text)))) { const c = DEPT_CANON[w]; if (c) out.add(c); }
   return out;
 }
 
@@ -1243,11 +1289,14 @@ function allDepts(text) {
 function departmentOtherOption(amazonPath, amazonCategory, options) {
   const root = (amazonPath && amazonPath.length) ? amazonPath[0]
     : String(amazonCategory || '').split('|')[0].split('>')[0];
-  const dept = detectDept(root) || (tokens(root)[0] || '').toLowerCase();   // "beauty"/"apparel"/…
+  const dept = detectDept(root) || (tokens(root)[0] || '').toLowerCase();   // "beauty"/"apparel"/"health"…
   if (!dept) return null;
   return (options || []).find(op => {
     const ws = new Set(String(op).toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(Boolean));
-    return ws.has(dept) && ws.has('other');
+    // "other" catch-all whose department == the breadcrumb root's — matched by the
+    // literal dept word OR its canonical dept, so "Healthcare - Other" resolves for
+    // a "health"-root product even though the option says "Healthcare" not "Health".
+    return ws.has('other') && (ws.has(dept) || detectDept(op) === dept);
   }) || null;
 }
 
@@ -1289,7 +1338,7 @@ function breadcrumbWeights(amazonPath, amazonCategory) {
     // outweighs shallow generic levels ("Electronics"/"Accessories"), so a specific
     // option wins over a generic one that only matches the department.
     const weight = 2 + Math.round((i / Math.max(1, n - 1)) * 10);     // root 2 → leaf 12
-    for (const t of tokens(lvl)) bump(stemTok(t), weight);
+    for (const t of withBigrams(tokens(lvl).map(stemTok))) bump(t, weight);
   });
   return w;
 }
@@ -1387,7 +1436,7 @@ function reconcileWeight(amazonGrams, amazonRaw, llmGrams, llmConf, title, rec, 
 // so a physical Kindle/eBook-READER accessory (case/skin/charger) is NOT matched;
 // and the caller also gates on "no Amazon weight" so anything with a real weight
 // (a physical book, a Kindle skin) is treated as physical regardless.
-const WEIGHTLESS_RE = /\b(kindle\s*edition|audible|audiobooks?|e-?books?(?!\s*reader)|digital\s*(?:download|copy|code|content|edition|movie|video|music|game|magazine)|software\s*download|app\s*download|mp3\s*download)\b/i;
+const WEIGHTLESS_RE = /\b(kindle\s*edition|audible|audiobooks?(?!\s*(?:player|cd|dvd|disc|cassette))|e-?books?(?!\s*reader)|digital\s*(?:download|copy|code|content|edition)|software\s*download|app\s*download|mp3\s*download)\b/i;
 function isWeightlessProduct(title, amazonCategory) {
   return WEIGHTLESS_RE.test(`${title || ''} ${amazonCategory || ''}`);
 }
@@ -1395,6 +1444,11 @@ function isWeightlessProduct(title, amazonCategory) {
 function volumeFloorGrams(title) {
   if (!title) return 0;
   const t = String(title).toLowerCase();
+  // ONLY for LIQUID products that ship FULL (volume ≈ shipped content mass, e.g. a
+  // 4 ml perfume). An EMPTY capacity-labeled vessel states its capacity, NOT content
+  // ("1 Litre Water Bottle" weighs ~150 g, not 1000 g) — so require a liquid word,
+  // else no floor (never overwrite a correct measured vessel weight).
+  if (!/\b(perfume|cologne|fragrance|eau\s*de|attar|oils?|serum|essence|lotion|creams?|gels?|shampoos?|conditioners?|body\s*wash|face\s*wash|hand\s*wash|sanitiz\w+|sanitis\w+|juice|syrup|sauce|honey|soaps?|cleanser|toner|mist|sprays?|liquid|inks?|paints?|remover|solution|tincture|drops|elixir|balm|moisturiz\w+|moisturis\w+)\b/i.test(t)) return 0;
   let ml = 0, m;
   // NB: no bare "cc" — automotive/bike titles use it for engine displacement
   // ("150 cc"), not liquid volume, which would invent a bogus floor.

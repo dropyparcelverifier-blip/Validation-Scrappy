@@ -175,6 +175,9 @@ const engine = createEngine({
   focusDashboard: async () => {
     try { const t = await getDashboardTab(); if (t?.id) { await chrome.tabs.update(t.id, { active: true }); if (t.windowId != null) await chrome.windows.update(t.windowId, { focused: true }); } } catch {}
   },
+  // The dashboard's window — the engine creates the Amazon + LLM tabs here so all
+  // the run's tabs live in ONE window (smooth "show working tab", no window jumps).
+  getWorkingWindowId: async () => { try { const t = await getDashboardTab(); return (t && t.windowId != null) ? t.windowId : null; } catch { return null; } },
   emit: (payload) => {
     // Mirror engine progress into our state so getState stays accurate, then
     // broadcast to the panel for live updates.
