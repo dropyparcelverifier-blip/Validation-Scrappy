@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Dropy Auto-Validator",
+  "version": "0.1.0",
+  "description": "Automates the Scrappy v2 -> Dropy -> Validation manual product-validation workflow by driving the user's logged-in browser session.",
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "tabs",
+    "sidePanel",
+    "alarms",
+    "power"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_title": "Dropy Auto-Validator"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.amazon.in/*",
+        "https://www.amazon.com/*",
+        "https://amazon.in/*",
+        "https://amazon.com/*"
+      ],
+      "js": ["content/amazon.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://gemini.google.com/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["content/llm-web.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "minimum_chrome_version": "114"
+}

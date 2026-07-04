@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dropy Auto-Validator</title>
+<style>
+  :root {
+    --bg: #0b0e14; --bg2: #0f131c;
+    --panel: #141925; --panel2: #1a2030; --panel3: #212838;
+    --line: #283145; --line2: #323c52;
+    --txt: #eaeef6; --muted: #8b96ab; --faint: #5c6679;
+    --accent: #5b8cff; --accent2: #7c5cff;
+    --ok: #34d399; --warn: #fbbf24; --err: #f87171; --info: #8ab0ff;
+    --grad: linear-gradient(135deg, #5b8cff 0%, #7c5cff 100%);
+    --radius: 12px; --radius-sm: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 400px at 100% -10%, rgba(124,92,255,.08), transparent 60%), var(--bg);
+    color: var(--txt); font: 13px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    display: flex; flex-direction: column; -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #2b3447; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4660; }
+
+  /* header */
+  header {
+    padding: 12px 14px; background: linear-gradient(180deg, var(--panel) 0%, var(--bg2) 100%);
+    border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px;
+  }
+  .logo { width: 26px; height: 26px; border-radius: 8px; background: var(--grad); display: grid; place-items: center;
+    box-shadow: 0 4px 14px rgba(91,140,255,.4); flex: none; }
+  .logo svg { width: 15px; height: 15px; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 650; letter-spacing: .2px; flex: 1; }
+  .pill { font-size: 11px; padding: 3px 9px; border-radius: 999px; font-weight: 600; letter-spacing: .2px;
+    background: var(--panel3); color: var(--muted); border: 1px solid var(--line2); white-space: nowrap; }
+  .pill.run { background: rgba(52,211,153,.14); color: var(--ok); border-color: rgba(52,211,153,.35); }
+  .pill.paused { background: rgba(251,191,36,.14); color: var(--warn); border-color: rgba(251,191,36,.35); }
+  .pill.captcha { background: rgba(248,113,113,.14); color: var(--err); border-color: rgba(248,113,113,.35); animation: pulse 1.4s infinite; }
+  .pill.dry { background: rgba(138,176,255,.12); color: var(--info); border-color: rgba(138,176,255,.3); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
+
+  /* nav */
+  nav { display: flex; background: var(--bg2); border-bottom: 1px solid var(--line); padding: 0 6px; }
+  nav button { position: relative; flex: 1; background: none; border: none; color: var(--muted);
+    padding: 11px 4px; cursor: pointer; font-size: 12px; font-weight: 600; transition: color .15s; }
+  nav button:hover { color: var(--txt); }
+  nav button.active { color: var(--txt); }
+  nav button.active::after { content: ""; position: absolute; left: 14%; right: 14%; bottom: -1px; height: 2.5px;
+    background: var(--grad); border-radius: 3px; }
+
+  main { flex: 1; overflow: auto; padding: 14px; }
+  .tab { display: none; animation: fade .2s ease; }
+  .tab.active { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  /* buttons */
+  .btnrow { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  button.act { background: var(--panel2); color: var(--txt); border: 1px solid var(--line2);
+    border-radius: var(--radius-sm); padding: 9px 14px; cursor: pointer; font-size: 13px; font-weight: 600;
+    transition: transform .1s, background .15s, box-shadow .15s; display: inline-flex; align-items: center; gap: 7px; }
+  button.act:hover { background: var(--panel3); }
+  button.act:active { transform: translateY(1px); }
+  button.act.primary { background: var(--grad); border: none; color: #fff; box-shadow: 0 4px 14px rgba(91,140,255,.35); flex: 1; justify-content: center; }
+  button.act.primary:hover { box-shadow: 0 6px 20px rgba(91,140,255,.5); }
+  button.act.danger:hover { background: rgba(248,113,113,.15); border-color: rgba(248,113,113,.4); color: #ffb4b4; }
+  button.act:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+  button.mini { padding: 5px 10px; font-size: 12px; }
+
+  /* cards */
+  .card { background: linear-gradient(180deg, var(--panel) 0%, var(--bg2) 120%); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 9px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
+  .kv { display: grid; grid-template-columns: 76px 1fr; gap: 6px 10px; font-size: 12.5px; align-items: center; }
+  .kv .k { color: var(--faint); font-weight: 600; }
+  .kv .v { color: var(--txt); word-break: break-word; }
+  .kv .v.mono { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--info); }
+
+  /* progress bar */
+  .pbar { height: 6px; background: var(--panel3); border-radius: 999px; overflow: hidden; margin: 4px 0 10px; }
+  .pfill { height: 100%; width: 0%; background: var(--grad); border-radius: 999px; transition: width .4s ease; }
+
+  /* counters */
+  .chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .chip { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; }
+  .chip .lbl { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .chip .num { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .d-proc { background: var(--info); } .d-pass { background: var(--ok); } .d-fail { background: var(--err); }
+  .d-lnf { background: #c084fc; } .d-unf { background: #f0abfc; } .d-flag { background: var(--warn); }
+
+  /* forms */
+  label.fld { display: block; margin: 12px 0 5px; color: var(--muted); font-size: 12px; font-weight: 600; }
+  input[type=text], input[type=number], input[type=password], select {
+    width: 100%; background: var(--bg2); border: 1px solid var(--line2); color: var(--txt);
+    border-radius: var(--radius-sm); padding: 9px 10px; font-size: 13px; transition: border .15s, box-shadow .15s; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,140,255,.18); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; font-size: 12.5px; color: var(--txt); margin: 4px 0; }
+  .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .hint { color: var(--faint); font-size: 11.5px; margin: 8px 0; line-height: 1.5; }
+  .muted { color: var(--muted); }
+
+  /* pills/snippets for scan */
+  .tag { display: inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 2px 7px; margin: 0 4px 4px 0; font-size: 11px; }
+  .tag.hot { border-color: var(--accent); color: var(--info); background: rgba(91,140,255,.1); }
+  pre.snip { background: #07090e; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 9px;
+    font-size: 11px; overflow: auto; max-height: 180px; white-space: pre-wrap; word-break: break-all; color: #c7d0e0; }
+
+  /* log */
+  #log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
+    background: #07090e; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
+  .logline { padding: 3px 4px; border-bottom: 1px solid #11151f; white-space: pre-wrap; word-break: break-word; border-radius: 4px; }
+  .logline:hover { background: #0d1119; }
+  .logline .t { color: var(--faint); margin-right: 7px; }
+  .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); } .info { color: var(--info); }
+
+  .banner { border: 1px solid rgba(251,191,36,.4); background: rgba(251,191,36,.08); }
+</style>
+</head>
+<body>
+  <header>
+    <span class="logo"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    <h1>Dropy Auto-Validator</h1>
+    <span id="statusBadge" class="pill">Idle</span>
+    <span id="dryBadge" class="pill dry">dry-run</span>
+  </header>
+
+  <nav>
+    <button data-tab="run" class="active">Run</button>
+    <button data-tab="scan">Scan</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="log">Log</button>
+  </nav>
+
+  <main>
+    <!-- RUN -->
+    <section class="tab active" id="tab-run">
+      <div class="btnrow">
+        <button class="act primary" id="btnStart">▶ Start</button>
+        <button class="act" id="btnPause">⏸ Pause</button>
+        <button class="act danger" id="btnStop">⏹ Stop</button>
+      </div>
+      <div class="btnrow">
+        <button class="act mini" id="btnExportCsv">⬇ CSV</button>
+        <button class="act mini" id="btnExportJson">⬇ JSON</button>
+        <button class="act mini" id="btnCloseTabs" title="Close the Amazon + Gemini/ChatGPT tabs">✕ Close tabs</button>
+        <button class="act mini danger" id="btnReset" title="Clear processed-ASIN set + audit + log">↺ Reset</button>
+      </div>
+      <label class="toggle"><input type="checkbox" id="dryRun" /> Dry-run — fill every field but never click Pass / Link NF</label>
+
+      <div id="captchaBanner" class="card banner" style="display:none;">
+        <b class="warn">⚠ CAPTCHA</b> — solve the Amazon challenge in the open tab. The run
+        <b>auto-resumes</b> once cleared (or click
+        <button class="act mini" id="btnResume">Resume</button>).
+      </div>
+
+      <div class="card">
+        <h3>Current</h3>
+        <div class="pbar"><div class="pfill" id="pfill"></div></div>
+        <div class="kv">
+          <div class="k">Status</div><div class="v" id="curStatus">Idle</div>
+          <div class="k">ASIN</div><div class="v mono" id="curAsin">—</div>
+          <div class="k">Step</div><div class="v" id="curStep">—</div>
+          <div class="k">Page</div><div class="v" id="curPage">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Counters</h3>
+        <div class="chips">
+          <div class="chip"><span class="lbl"><span class="dot d-proc"></span>Processed</span><span class="num" id="cProcessed">0</span></div>
+          <div class="chip"><span class="lbl"><span class="dot d-pass"></span>Passed</span><span class="num ok" id="cPassed">0</span></div>
+          <div class="chip"><span class="lbl"><span class="dot d-fail"></span>Failed</span><span class="num err" id="cFailed">0</span></div>
+          <div class="chip"><span class="lbl"><span class="dot d-lnf"></span>Link NF</span><span class="num" id="cLinkNf">0</span></div>
+          <div class="chip"><span class="lbl"><span class="dot d-unf"></span>USA Link NF</span><span class="num" id="cUsaLinkNf">0</span></div>
+          <div class="chip"><span class="lbl"><span class="dot d-flag"></span>Flagged</span><span class="num warn" id="cFlagged">0</span></div>
+        </div>
+      </div>
+
+      <p class="hint">Open the Validation dashboard tab, leave <b>Dry-run ON</b>, then Start. It fills every
+        field; turn dry-run off to go live (clicks Pass / Link NF / USA Link NF).</p>
+    </section>
+
+    <!-- SCAN -->
+    <section class="tab" id="tab-scan">
+      <div class="btnrow">
+        <button class="act primary" id="btnScan">Scan dashboard</button>
+        <button class="act" id="btnProbe">Probe Amazon</button>
+        <button class="act mini" id="btnCopyScan">Copy JSON</button>
+      </div>
+      <p class="hint">Open the dashboard tab, then Scan. Open any Amazon product/404 tab, then Probe.</p>
+      <div id="scanOut"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="tab" id="tab-settings">
+      <div class="card">
+        <h3>Dashboard</h3>
+        <label class="fld">Origin (scheme://host:port)</label>
+        <input type="text" id="setOrigin" placeholder="http://100.82.234.106:3000" />
+      </div>
+      <div class="card">
+        <h3>Validation rules</h3>
+        <div class="two">
+          <div><label class="fld">BSR threshold (RS if below)</label><input type="number" id="setBsr" /></div>
+          <div><label class="fld">Page timeout (ms)</label><input type="number" id="setTimeout" /></div>
+        </div>
+        <div class="two">
+          <div><label class="fld">Throttle min (ms)</label><input type="number" id="setThrMin" /></div>
+          <div><label class="fld">Throttle max (ms)</label><input type="number" id="setThrMax" /></div>
+        </div>
+        <label class="fld">US ZIP for amazon.com (so .com shows USD, not ₹)</label>
+        <input type="text" id="setUsZip" placeholder="10001" />
+        <label class="fld">USD→INR rate (for the Move-Fail cheaper-USA rescue)</label>
+        <input type="number" id="setRate" placeholder="95" />
+        <label class="toggle" style="margin-top:8px;"><input type="checkbox" id="setShowTab" /> Show the Amazon tab being worked on (foreground)</label>
+        <label class="fld">No-confident-category behaviour</label>
+        <select id="setCatMode">
+          <option value="flag-blank">Leave blank + flag for review</option>
+          <option value="closest">Pick closest + flag for review</option>
+        </select>
+        <label class="toggle" style="margin-top:10px;"><input type="checkbox" id="setUseLlmCat" /> Use LLM to pick category (Amazon breadcrumb + weight LLM channel)</label>
+      </div>
+      <div class="card">
+        <h3>Weight fallback (when Amazon has no weight)</h3>
+        <label class="fld">Source</label>
+        <select id="setWeightMode">
+          <option value="gemini-web">Gemini — web UI (logged-in, no key)</option>
+          <option value="chatgpt-web">ChatGPT — web UI (logged-in, no key)</option>
+          <option value="api">API key (below)</option>
+          <option value="off">Off — flag missing weights</option>
+        </select>
+        <p class="hint">Web modes drive your signed-in chat tab; the other one is used as backup if the first fails.</p>
+        <div id="apiFields">
+          <label class="fld">API provider</label>
+          <select id="setLlmProvider">
+            <option value="gemini">Google (Gemini)</option>
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+          <label class="fld">Model (blank = default)</label>
+          <input type="text" id="setLlmModel" placeholder="e.g. gemini-2.0-flash" />
+          <label class="fld">API key</label>
+          <input type="password" id="setLlmKey" placeholder="only needed for API mode" />
+        </div>
+      </div>
+      <div class="btnrow">
+        <button class="act primary" id="btnSaveSettings">Save settings</button>
+        <span id="saveMsg" class="muted" style="align-self:center;"></span>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section class="tab" id="tab-log">
+      <div class="btnrow">
+        <button class="act mini" id="btnClearLog">Clear log</button>
+        <span class="muted" id="regOrigin" style="align-self:center; font-size:11px;"></span>
+      </div>
+      <div id="log"></div>
+    </section>
+  </main>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
