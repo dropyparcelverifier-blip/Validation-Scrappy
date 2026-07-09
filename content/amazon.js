@@ -231,10 +231,12 @@
     // BUYBOX / price blocks (center AND right column, plus Subscribe&Save and the
     // modern grocery layouts). NOT bare #centerCol (its first .a-offscreen is often
     // a SPONSORED price). Order = most-specific "price you pay" first.
+    // ONE-TIME / main price blocks only — NOT #sns-base-price/#subscriptionPrice
+    // (those are the discounted SUBSCRIBE price, which would be a wrong low price).
     const containers = [
       '#corePriceDisplay_desktop_feature_div', '#corePriceDisplay_feature_div', '#corePrice_feature_div',
       '#apex_desktop', '#apex_offerDisplay_desktop', '#price_inside_buybox',
-      '#newAccordionRow', '#buyNew_noncbb', '#sns-base-price', '#subscriptionPrice', '#snsDefaultBuyBox',
+      '#newAccordionRow', '#buyNew_noncbb',
       '#priceblock_ourprice', '#priceblock_dealprice', '#priceblock_saleprice',
       '#buybox', '#desktop_buybox', '#qualifiedBuybox', '#rightCol', '#tp_price_block_total_price_ww',
     ];
