@@ -226,7 +226,7 @@
   // ----- Price (spec §4): .a-offscreen first, else whole+fraction. ----------
   function parsePrice() {
     const bodyText = document.body?.innerText || '';
-    const unavailable = /cannot be shipped to your selected delivery location|currently unavailable|see all buying options/i.test(bodyText);
+    const unavailable = /cannot be shipped to your selected delivery location|currently unavailable|see all buying options|no featured offers available/i.test(bodyText);
 
     // BUYBOX / price blocks (center AND right column, plus Subscribe&Save and the
     // modern grocery layouts). NOT bare #centerCol (its first .a-offscreen is often
@@ -317,7 +317,12 @@
   // variant's price — never just the first one — and if we can't tell which is
   // selected, return blank (price left empty + flagged) rather than a wrong one.
   function selectedVariantPrice() {
-    const vscope = document.querySelector('#inline-twister-row-size_name, #tp-inline-twister-dim-values-container, #twisterContainer, #twister, #variation_size_name, #centerCol, #ppd') || document;
+    // Any inline-twister dimension row (size_name, style_name, color_name, …), not
+    // just size — Dr Brown's etc. put the price under a Style/Color twister.
+    const vscope = document.querySelector(
+      '[id^="inline-twister-row-"], #tp-inline-twister-dim-values-container, #twisterContainer,' +
+      ' #twister, #twister_feature_div, #variation_size_name, #variation_style_name, #variation_color_name,' +
+      ' #centerCol, #ppd') || document;
 
     // Read a single unambiguous price out of an element: only accept it when the
     // element's subtree contains EXACTLY ONE distinct amount (so we never return
