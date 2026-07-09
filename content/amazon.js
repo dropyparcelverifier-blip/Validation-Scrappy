@@ -228,51 +228,68 @@
     const bodyText = document.body?.innerText || '';
     const unavailable = /cannot be shipped to your selected delivery location|currently unavailable|see all buying options/i.test(bodyText);
 
-    // BUYBOX-SPECIFIC blocks only — NOT #centerCol (it spans the whole middle
-    // and its first .a-offscreen is often a SPONSORED product, which wrote a
-    // wrong ₹ price on "Currently unavailable" pages).
+    // BUYBOX / price blocks (center AND right column, plus Subscribe&Save and the
+    // modern grocery layouts). NOT bare #centerCol (its first .a-offscreen is often
+    // a SPONSORED price). Order = most-specific "price you pay" first.
     const containers = [
-      '#corePriceDisplay_feature_div', '#corePrice_feature_div', '#price_inside_buybox',
-      '#apex_desktop', '#buybox', '#tp_price_block_total_price_ww', '#qualifiedBuybox',
+      '#corePriceDisplay_desktop_feature_div', '#corePriceDisplay_feature_div', '#corePrice_feature_div',
+      '#apex_desktop', '#apex_offerDisplay_desktop', '#price_inside_buybox',
+      '#newAccordionRow', '#buyNew_noncbb', '#sns-base-price', '#subscriptionPrice', '#snsDefaultBuyBox',
+      '#priceblock_ourprice', '#priceblock_dealprice', '#priceblock_saleprice',
+      '#buybox', '#desktop_buybox', '#qualifiedBuybox', '#rightCol', '#tp_price_block_total_price_ww',
     ];
-    let priceText = '';
-    // When the buybox is unavailable, the headline price is the SELECTED variant
-    // swatch ("1 option from $34.89") — read that first so we don't grab some
-    // other offer.
-    if (unavailable) priceText = selectedVariantPrice();
-
-    if (!priceText) {
-      for (const sel of containers) {
-        const root = document.querySelector(sel);
-        if (!root) continue;
-        const off = root.querySelector('.a-price:not([data-a-strike]) .a-offscreen');
-        if (off && off.textContent.trim()) { priceText = off.textContent.trim(); break; }
-        const whole = root.querySelector('.a-price:not([data-a-strike]) .a-price-whole');
-        if (whole) {
-          const w = (whole.textContent || '').replace(/[^\d]/g, '');
-          const frac = (root.querySelector('.a-price:not([data-a-strike]) .a-price-fraction')?.textContent || '').replace(/[^\d]/g, '');
-          const sym = (root.querySelector('.a-price:not([data-a-strike]) .a-price-symbol')?.textContent || '').trim();
-          if (w) { priceText = `${sym}${w}${frac ? '.' + frac : ''}`; break; }
-        }
+    // Read the "price you pay" from a block: prefer the modern priceToPay/
+    // apexPriceToPay element, else any non-struck .a-price (.a-offscreen, else
+    // whole+fraction). Skip struck-out MRP/"per unit" and $0.xx-per-ounce noise.
+    const priceIn = (root) => {
+      if (!root) return '';
+      const off = root.querySelector(
+        '.priceToPay .a-offscreen, .apexPriceToPay .a-offscreen, .reinventPricePriceToPayMargin .a-offscreen,' +
+        ' .a-price[data-a-color="base"] .a-offscreen, .a-price:not([data-a-strike]):not(.a-text-price) .a-offscreen');
+      if (off && /[₹$]\s?\d/.test(off.textContent)) return off.textContent.trim();
+      const whole = root.querySelector('.priceToPay .a-price-whole, .apexPriceToPay .a-price-whole, .a-price:not([data-a-strike]) .a-price-whole');
+      if (whole) {
+        const box = whole.closest('.a-price') || root;
+        const w = (whole.textContent || '').replace(/[^\d]/g, '');
+        const frac = (box.querySelector('.a-price-fraction')?.textContent || '').replace(/[^\d]/g, '');
+        const sym = (box.querySelector('.a-price-symbol')?.textContent || '').trim();
+        if (w) return `${sym}${w}${frac ? '.' + frac : ''}`;
       }
-    }
-    if (!priceText) priceText = selectedVariantPrice();           // twister fallback
-    // Last resort: scan the center column but SKIP any price inside a sponsored /
-    // carousel / "similar items" / "customers also viewed" block, and NEVER on an
-    // unavailable page (where the only prices are sponsored/related = wrong).
+      return '';
+    };
+    let priceText = '';
+    // Unavailable page → the headline price is the SELECTED variant swatch.
+    if (unavailable) priceText = selectedVariantPrice();
+    if (!priceText) { for (const sel of containers) { const p = priceIn(document.querySelector(sel)); if (p) { priceText = p; break; } } }
+    if (!priceText) priceText = selectedVariantPrice();           // variant-grid (e.g. selected size tile)
+    // Last resort: scan the buybox/center/RIGHT columns. Prefer the definitive
+    // "price you pay" element; skip sponsored/related, "frequently bought", struck
+    // MRP, and per-unit ("/ ounce", "/ count") secondary prices.
     if (!priceText && !unavailable) {
-      const root = document.querySelector('#ppd, #centerCol, #dp-container, #dp');
+      const root = document.querySelector('#ppd, #centerCol, #rightCol, #desktop_buybox, #dp-container, #dp');
       if (root) {
-        const SKIP = '[data-component-type="sp-sponsored-result"], [data-component-type="s-search-result"], .a-carousel, [cel_widget_id*="sponsored" i], [cel_widget_id*="similarities" i], #similarities_feature_div, #sims-consolidated-2_feature_div, #sp_detail, #sponsoredProducts, .s-result-item';
-        for (const o of root.querySelectorAll('.a-price:not([data-a-strike]) .a-offscreen')) {
+        const SKIP = '[data-component-type="sp-sponsored-result"], [data-component-type="s-search-result"], .a-carousel, [cel_widget_id*="sponsored" i], [cel_widget_id*="similarities" i], #similarities_feature_div, #sims-consolidated-2_feature_div, #sp_detail, #sponsoredProducts, .s-result-item, #sns-tiered-price, [id*="freshBundle" i], .a-text-price';
+        const grab = (nodes) => { for (const o of nodes) {
           if (o.closest(SKIP)) continue;
-          const t = (o.textContent || '').trim();
-          if (t) { priceText = t; break; }
-        }
+          const par = o.closest('.a-price'); if (par && /per\s*(unit|ounce|count|100|kg|g|ml|l)\b|\/\s*(ounce|count|oz|kg|g|ml|l)\b/i.test(par.parentElement?.textContent || '')) continue;
+          const t = (o.textContent || '').trim(); if (/[₹$]\s?\d/.test(t)) return t;
+        } return ''; };
+        priceText = grab(root.querySelectorAll('.priceToPay .a-offscreen, .apexPriceToPay .a-offscreen'))
+                 || grab(root.querySelectorAll('.a-price:not([data-a-strike]) .a-offscreen'));
       }
     }
     // No real product price (e.g. unavailable / not sold here) → leave it blank.
-    if (!priceText) return { priceValue: null, currency: '', priceRaw: '' };
+    // Diagnostic: if the buybox VISIBLY shows a ₹/$ price we still failed to parse
+    // (variant grid / Subscribe&Save layout), capture its HTML so the selector can
+    // be locked. Only when a price is actually present — not for no-price products.
+    if (!priceText) {
+      let priceDebugHtml = '';
+      if (!unavailable) {
+        const dbg = document.querySelector('#corePriceDisplay_desktop_feature_div, #apex_desktop, #newAccordionRow, #buybox, #desktop_buybox, #rightCol, #ppd');
+        if (dbg && /[₹$]\s?\d/.test(dbg.textContent || '')) priceDebugHtml = clip(dbg.outerHTML, 1600);
+      }
+      return { priceValue: null, currency: '', priceRaw: '', priceDebugHtml };
+    }
 
     let currency = /₹|inr/i.test(priceText) ? 'INR' : /\$|usd/i.test(priceText) ? 'USD' : '';
     // Recover a missing symbol from the host: amazon.in is always INR. (Do NOT
@@ -318,7 +335,7 @@
     // 1) The SELECTED variant tile. Climb from the marker outward, stopping at the
     //    tightest ancestor that contains exactly one price (= this variant's tile,
     //    not the whole list which would hold every variant's price).
-    const SEL = '.a-button-selected, [aria-checked="true"], [role="radio"][aria-checked="true"], li.selected, .swatch-list-item-text-container.selected';
+    const SEL = '.a-button-selected, [aria-checked="true"], [role="radio"][aria-checked="true"], li.selected, .swatch-list-item-text-container.selected, .a-button-toggle.a-button-selected, [data-a-selected="true"], [aria-current="true"], .swatchSelect, .dimension-value-list-item-square.selected';
     const sel = vscope.querySelector(SEL);
     if (sel) {
       for (let node = sel, i = 0; node && i < 4; node = node.parentElement, i++) {
@@ -520,6 +537,9 @@
         const data = scrapeProduct();
         log(`scrape ${data.asin || '?'}: bsr=${data.bsrPrimary} weight=${data.weightGrams}g ` +
             `price=${data.currency}${data.priceValue}`, 'ok');
+        if (data.priceValue == null && data.priceDebugHtml) {
+          log(`${data.asin || '?'}: PRICE PARSE FAILED — the buybox shows a price we missed. Copy & send this so I can lock it: ${String(data.priceDebugHtml).slice(0, 800)}`, 'warn');
+        }
         sendResponse({ ok: true, data });
       } catch (e) { sendResponse({ ok: false, error: e?.message || String(e) }); }
       return false;
