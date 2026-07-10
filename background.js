@@ -352,6 +352,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (action === 'resumeRun') { coldStart.then(() => engine.resume()).then(sendResponse); return true; }
   if (action === 'stopRun')   { engine.stop().then(sendResponse); return true; }
   if (action === 'closeTabs') { engine.closeTabs().then(sendResponse); return true; }
+  if (action === 'restartRun') {
+    // Start over: full reset (stop + wipe progress/counters/records + log) then a
+    // fresh Start from the top of the current page.
+    coldStart.then(async () => {
+      const r = await engine.reset();
+      if (r?.ok) {
+        state.log = [];
+        await chrome.storage.local.remove([K.LOG]).catch(() => {});
+        broadcast({ action: 'logCleared' });
+      }
+      return engine.start();
+    }).then(sendResponse);
+    return true;
+  }
   if (action === 'resetRun')  {
     coldStart.then(() => engine.reset()).then(async (res) => {
       // Clear the activity log too — but only if the reset actually happened

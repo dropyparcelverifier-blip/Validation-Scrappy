@@ -283,6 +283,16 @@ $('btnStart')?.addEventListener('click', () => ctrl('startRun'));
 $('btnStop')?.addEventListener('click', () => ctrl('stopRun'));
 $('btnPause')?.addEventListener('click', () => ctrl($('btnPause').dataset.act || 'pauseRun'));
 $('btnResume')?.addEventListener('click', () => ctrl('resumeRun'));
+$('btnRestart')?.addEventListener('click', async () => {
+  // Start over: stop → wipe progress/counters/log → run fresh from the top.
+  const btn = $('btnRestart'); const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Restarting…';
+  appendLog({ ts: Date.now(), text: 'restart requested — stopping, clearing progress + log, starting fresh…', kind: 'info' });
+  const res = await send({ action: 'restartRun' });
+  appendLog({ ts: Date.now(), text: res?.ok ? 'restarted — fresh run from the top' : ('restart failed: ' + (res?.error || '')), kind: res?.ok ? 'ok' : 'err' });
+  renderState(await send({ action: 'getState' }));
+  btn.disabled = false; btn.textContent = orig;
+});
 
 // ---------------- export / reset ----------------
 async function exportAudit(format) {
