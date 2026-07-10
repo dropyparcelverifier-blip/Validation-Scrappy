@@ -34,6 +34,9 @@ export function createEngine(ctx) {
     loopActive: false,
     resetSeq: 0,               // bumped by reset() so an exiting loop can detect it
     usZipSet: false,
+    active: false,             // "a run is in-flight" — survives restart to auto-resume.
+                               // true from Start/Resume; cleared on Stop/Pause/Reset/Done.
+                               // A hard SW kill leaves it true (finally never ran) → resume.
   };
 
   // ---- persistence ----------------------------------------------------------
@@ -46,6 +49,7 @@ export function createEngine(ctx) {
     s.status = rs.status || 'Idle';
     s.page = rs.page ?? null;
     s.totalPages = rs.totalPages ?? null;
+    s.active = !!rs.active;
   }
   const hydrated = hydrate();
 
@@ -57,7 +61,7 @@ export function createEngine(ctx) {
         [K.PROCESSED]: Array.from(s.processed),
         [K.COUNTERS]: s.counters,
         [K.ROW_RECORDS]: s.rowRecords,
-        [K.RUN_STATE]: { status: s.status, page: s.page, totalPages: s.totalPages, paused: s.paused, pausedByCaptcha: s.pausedByCaptcha },
+        [K.RUN_STATE]: { status: s.status, page: s.page, totalPages: s.totalPages, paused: s.paused, pausedByCaptcha: s.pausedByCaptcha, active: s.active },
       }).catch(() => {});
     }, 300);
   }
@@ -1023,6 +1027,7 @@ export function createEngine(ctx) {
       // Close the managed Amazon + LLM tabs when the run is truly over (done,
       // stopped, or errored) — but keep them open for a CAPTCHA/pause resume.
       if (!s.pausedByCaptcha && !s.pauseRequested && !s.paused) {
+        s.active = false;   // truly over (done/stopped/error) — no auto-resume next launch
         highlight(null);  // clear the active-row highlight on the dashboard
         try { await tab.closeTab(); } catch {}
         try { await closeLlmTab(); } catch {}
@@ -1055,10 +1060,12 @@ export function createEngine(ctx) {
     s.counters = { processed: 0, passed: 0, failed: 0, linkNf: 0, usaLinkNf: 0, flagged: 0 };
     await chrome.storage.local.remove([K.PROCESSED, K.COUNTERS, K.ROW_RECORDS]).catch(() => {});
     s.stopRequested = false; s.pauseRequested = false; s.paused = false; s.pausedByCaptcha = false;
+    s.active = true;         // mark in-flight so a crash/restart auto-resumes
     s.running = true; s.status = settings.dryRun ? 'Running (dry-run)' : 'Running';
     s.usZipSet = false;      // re-verify .com is USD at the start of each run
     lastLoggedPage = null;   // so the first page logs after a restart
     try { chrome.power?.requestKeepAwake?.('display'); } catch {}
+    persist();               // save active=true now so a crash in row 1 still resumes
     emit();
     runLoop();
     return { ok: true };
@@ -1067,8 +1074,10 @@ export function createEngine(ctx) {
     await hydrated;
     if (s.running) return { ok: false, error: 'already running' };
     s.pausedByCaptcha = false; s.paused = false; s.pauseRequested = false; s.stopRequested = false;
+    s.active = true;         // in-flight again (also covers auto-resume after a crash)
     const settings = await getSettings();
     s.running = true; s.status = settings.dryRun ? 'Running (dry-run)' : 'Running';
+    persist();               // save active=true promptly
     emit();
     runLoop();
     return { ok: true };
@@ -1076,12 +1085,14 @@ export function createEngine(ctx) {
   function pause() {
     if (!s.running) return { ok: false, error: 'not running' };
     s.pauseRequested = true;
+    s.active = false;        // intentional pause — do NOT auto-resume on restart
     s.status = 'Pausing… (finishing current step)';
-    emit();
+    persist(); emit();
     return { ok: true };
   }
   async function stop() {
     s.stopRequested = true; s.pauseRequested = false;
+    s.active = false;        // intentional stop — do NOT auto-resume on restart
     highlight(null);  // clear the row highlight
     await tab.closeTab();
     await closeLlmTab();
@@ -1094,7 +1105,7 @@ export function createEngine(ctx) {
     s.resetSeq++;                       // tell any in-flight loop to stand down
     await stopAndWait();
     try { highlight(null); } catch {}
-    s.running = false; s.loopActive = false;
+    s.running = false; s.loopActive = false; s.active = false;
     // Wipe ALL state.
     s.processed = new Set(); s.rowRecords = {}; s.queue = [];
     s.counters = { processed: 0, passed: 0, failed: 0, linkNf: 0, usaLinkNf: 0, flagged: 0 };
@@ -1130,7 +1141,11 @@ export function createEngine(ctx) {
     return { ok: true };
   }
 
-  return { start, pause, resume, stop, reset, getStatus, getRecords, closeTabs, hydrated };
+  // True when a run was in-flight and got interrupted (crash/restart) rather than
+  // gracefully stopped/paused — the background auto-resume checks this on launch.
+  function wantsResume() { return s.active && !s.running && !s.loopActive; }
+
+  return { start, pause, resume, stop, reset, getStatus, getRecords, closeTabs, wantsResume, hydrated };
 }
 
 // ----------------------------------------------------------------------------

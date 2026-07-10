@@ -57,8 +57,9 @@ const coldStart = (async () => {
   if (data[K.COUNTERS])                 state.counters = { ...state.counters, ...data[K.COUNTERS] };
   const rs = data[K.RUN_STATE] || {};
   state.status = rs.status || 'Idle';
-  // A run never auto-resumes as "running" across an SW restart until the engine
-  // (Phase 5) explicitly re-enters; reflect paused/captcha for the panel only.
+  // Reflect paused/captcha for the panel immediately. If a run was in-flight when
+  // the browser/SW died, autoResumeIfNeeded() (below) re-enters the loop once the
+  // dashboard tab is back — the panel flips to "Running" then.
   state.paused = !!rs.paused;
   state.pausedByCaptcha = !!rs.pausedByCaptcha;
 
@@ -189,6 +190,49 @@ const engine = createEngine({
     broadcast({ action: 'progress', payload });
   },
 });
+
+// ----------------------------------------------------------------------------
+// Auto-resume — after a browser restart or an SW crash mid-run, continue the
+// interrupted run automatically (the user chose unattended multi-PC operation).
+// Only fires when the engine says a run was genuinely in-flight (not Stopped /
+// Paused / Done). Waits for the dashboard tab to come back (session restore can
+// lag several seconds on launch) before re-entering the loop.
+// ----------------------------------------------------------------------------
+let autoResumeDone = false;
+async function autoResumeIfNeeded(trigger) {
+  if (autoResumeDone) return;          // one attempt per SW lifetime
+  autoResumeDone = true;
+  try {
+    await coldStart;
+    await engine.hydrated;
+    if (!engine.wantsResume()) return; // nothing interrupted to resume
+    pushLog(`Auto-resume (${trigger}): a run was interrupted — waiting for the dashboard tab…`, 'info');
+    let tab = null;
+    for (let i = 0; i < 90; i++) {     // up to ~90s for session restore to reopen it
+      tab = await getDashboardTab();
+      if (tab?.id) break;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    if (!tab?.id) {
+      pushLog('Auto-resume aborted — no dashboard tab reopened. Open the dashboard and click Resume.', 'warn');
+      return;
+    }
+    // Make sure the content script is registered/injected on the restored tab.
+    await ensureDashboardRegistration(state.settings.dashboardOrigin);
+    await new Promise(r => setTimeout(r, 1500));   // let the grid finish rendering
+    if (!engine.wantsResume()) return;             // user already hit Resume during the wait
+    const res = await engine.resume();
+    pushLog(res?.ok ? 'Auto-resumed the interrupted run — skipping already-processed rows.'
+                    : `Auto-resume failed: ${res?.error || 'unknown'} (click Resume to retry).`,
+            res?.ok ? 'ok' : 'warn');
+  } catch (e) {
+    pushLog(`Auto-resume error: ${e.message} (click Resume to continue).`, 'warn');
+  }
+}
+// Browser launch (PC restart) is the primary trigger; the cold-start call also
+// covers an SW that was evicted mid-run and later re-woken.
+try { chrome.runtime.onStartup?.addListener(() => autoResumeIfNeeded('browser start')); } catch {}
+autoResumeIfNeeded('cold start');
 
 // CSV export of the per-row audit records for the session.
 function recordsToCsv(records) {
