@@ -949,19 +949,30 @@ export function createEngine(ctx) {
   // only reliable "next row" is the top unprocessed row of a fresh read.
   async function readPage() {
     let res = await ctx.sendToDashboard({ type: 'READ_PAGE_ROWS' });
-    // The grid can be momentarily empty/undetected during a re-render — retry once.
-    if (!res?.ok || !(res.rows || []).length) {
-      await sleep(700);
-      const res2 = await ctx.sendToDashboard({ type: 'READ_PAGE_ROWS' });
-      if (res2) res = res2;
+    // The grid can be missing/empty mid-render — React re-mounts the table when
+    // the RS/DP filter or the page changes, so a read fired too early sees no
+    // grid. Retry with backoff: LONGER when the grid is entirely missing (still
+    // loading) than when it's present-but-empty (more likely genuinely done).
+    for (let attempt = 0; (!res?.ok || !(res.rows || []).length) && attempt < 6; attempt++) {
+      await sleep(res?.ok ? 700 : 1200);            // present-but-empty: brief; no-grid: longer
+      const r = await ctx.sendToDashboard({ type: 'READ_PAGE_ROWS' });
+      if (r) res = r;
+      if (res?.ok && (res.rows || []).length) break;   // got rows → go
+      if (res?.ok && attempt >= 1) break;              // grid present but still empty after a couple tries → done
     }
     // Refresh pagination (best effort) so the Done check below is accurate.
     const pag = await ctx.sendToDashboard({ type: 'READ_PAGINATION' });
     if (pag?.pagination) { s.page = pag.pagination.page; s.totalPages = pag.pagination.totalPages; }
-    // No grid / no rows after a retry is the NORMAL end state when the Main File
-    // empties (every row Passed/NF'd). Return an EMPTY page so the loop advances
-    // pagination / finishes cleanly — NOT a thrown error that aborts the run.
-    if (!res?.ok) { log(`page read: ${res?.error || 'no rows'} — treating as empty (rows may all be processed)`, 'info'); return []; }
+    // Grid still not found after retries: either the Main File is empty (normal
+    // Done) OR the dashboard isn't showing the product grid yet (RS/DP filter
+    // loading / wrong view). Return empty so the loop finishes cleanly, but log
+    // an ACTIONABLE warning so a not-yet-loaded grid isn't silently "Done".
+    if (!res?.ok) {
+      log(`page read: ${res?.error || 'no rows'} after 6 retries — the product grid isn't visible to the extension. `
+        + `If rows ARE on screen, the RS/DP filter may still be loading (wait, then Start/Restart). `
+        + `If the Main File is empty, this is the normal end (Done).`, 'warn');
+      return [];
+    }
     return res.rows || [];
   }
 
